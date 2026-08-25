@@ -131,7 +131,7 @@ input[type=file] { display:none; }
 
 <div class="layout">
   <div class="left">
-    <input type="text" id="search" placeholder="🔍  Number leh hming zawng..." oninput="doSearch()" autofocus>
+    <input type="text" id="search" placeholder="🔍  Number leh hming zawng..." oninput="doSearch()" aria-label="Search hymns by number, title or lyrics" autofocus>
     <div class="hymn-list" id="hymn-list"></div>
     <button onclick="openNewHymn()" style="margin:10px;padding:10px;background:#e8c84a;color:#111;border:none;border-radius:8px;font-weight:bold;cursor:pointer;font-size:0.85rem;">+ Add New Hymn</button>
   </div>
@@ -277,7 +277,6 @@ window.db = db;
 window.fbReady = true;
 window.doSearch();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 let currentNum = null;
 let ocrImageBase64 = null;
@@ -302,22 +301,51 @@ function switchTab(tab) {
 
 window.doSearch = function() {
   const q = document.getElementById('search').value.trim().toLowerCase();
+  const list = document.getElementById('hymn-list');
+  list.textContent = '';
+
   const entries = q==='' ? Object.keys(window.H||{}).map(k=>(window.H||{})[k])
     : Object.values(window.H||{}).filter(h => {
       if (String(h.n).startsWith(q)) return true;
       if (h.f && h.f.toLowerCase().includes(q)) return true;
       for (const v of (h.v||[])) {
         const lines = Array.isArray(v) ? v : (v.lines||[]);
-        for (const l of lines) if (l.toLowerCase().includes(q)) return true;
+        for (const l of lines) if (String(l).toLowerCase().includes(q)) return true;
       }
       return false;
     });
-  document.getElementById('hymn-list').innerHTML = entries.map(h =>
-    `<div class="hymn-row ${currentNum===String(h.n)?'active':''}" onclick="showHymn('${h.n}')">
-      <span class="n">${h.n}</span>
-      <span class="t">${h.f||''}</span>
-      ${(window.editedNums||new Set()).has(String(h.n)) ? '<span class="edited-dot" title="Edited"></span>' : ''}
-    </div>`).join('');
+
+  for (const h of entries) {
+    const row = document.createElement('div');
+    row.className = `hymn-row ${currentNum===String(h.n)?'active':''}`;
+    row.tabIndex = 0;
+    row.addEventListener('click', () => showHymn(String(h.n)));
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        showHymn(String(h.n));
+      }
+    });
+
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = String(h.n);
+    row.appendChild(n);
+
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = h.f || '';
+    row.appendChild(t);
+
+    if ((window.editedNums||new Set()).has(String(h.n))) {
+      const dot = document.createElement('span');
+      dot.className = 'edited-dot';
+      dot.title = 'Edited';
+      row.appendChild(dot);
+    }
+
+    list.appendChild(row);
+  }
 }
 
 function showHymn(num) {
@@ -523,7 +551,28 @@ async function runOCR() {
   status.className = 'ocr-status loading';
 
   try {
-    const result = await Tesseract.recognize(
+    if (typeof window.Tesseract === 'undefined') {
+      if (!window.__tesseractLoadPromise) {
+        window.__tesseractLoadPromise = new Promise((resolve, reject) => {
+          const existing = document.querySelector('script[data-tesseract-loader="1"]');
+          if (existing) {
+            existing.addEventListener('load', () => resolve(), { once: true });
+            existing.addEventListener('error', () => reject(new Error('Failed to load OCR engine')), { once: true });
+            return;
+          }
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+          script.async = true;
+          script.dataset.tesseractLoader = '1';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Failed to load OCR engine'));
+          document.head.appendChild(script);
+        });
+      }
+      await window.__tesseractLoadPromise;
+    }
+
+    const result = await window.Tesseract.recognize(
       ocrImageBase64,
       'eng',
       {
@@ -569,8 +618,20 @@ function formatOCRText(raw) {
 
 function populateHymnSelect() {
   const sel=document.getElementById('hymn-select');
-  sel.innerHTML='<option value="">— Select hymn —</option>'+
-    Object.values(window.H).map(h=>`<option value="${h.n}">${h.n}. ${h.f||''}</option>`).join('');
+  sel.textContent = '';
+
+  const emptyOpt = document.createElement('option');
+  emptyOpt.value = '';
+  emptyOpt.textContent = '— Select hymn —';
+  sel.appendChild(emptyOpt);
+
+  Object.values(window.H).forEach(h => {
+    const opt = document.createElement('option');
+    opt.value = String(h.n);
+    opt.textContent = `${h.n}. ${h.f||''}`;
+    sel.appendChild(opt);
+  });
+
   if(currentNum) sel.value=currentNum;
 }
 
